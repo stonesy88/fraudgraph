@@ -1,0 +1,93 @@
+version: "3.10.0"
+
+networks:
+  app-tier:
+    driver: bridge
+
+services:
+  memgraph:
+    image: "memgraph/memgraph-platform"
+    ports:
+      - "3000:3000"
+      - "7687:7687"
+    entrypoint: ["/usr/bin/supervisord"]
+    networks:
+      - app-tier
+
+  card_fraud:
+    build: .
+    volumes:
+      - .:/app
+    ports:
+      - "5000:5000"
+    environment:
+      - MEMGRAPH_HOST=memgraph
+      - MEMGRAPH_PORT=7687
+    depends_on:
+      - memgraph
+    networks:
+      - app-tier  
+
+  zookeeper:
+    image: "bitnami/zookeeper:latest"
+    ports:
+      - "2181:2181"
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    networks:
+      - app-tier
+
+  kafka:
+    image: "bitnami/kafka:3.2"
+    ports:
+      - "9092:9092"
+    environment:
+      - KAFKA_BROKER_ID=1
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT
+    depends_on:
+      - zookeeper
+    networks:
+      - app-tier
+
+  kafka-connect:
+    image: "confluentinc/cp-kafka-connect:latest"
+    container_name: kafka_connect
+    depends_on:
+      - kafka
+      - zookeeper
+    ports:
+      - "8083:8083"
+    networks:
+      - app-tier        
+    environment:
+      - CONNECT_BOOTSTRAP_SERVERS=kafka:9092
+      - CONNECT_REST_ADVERTISED_HOST_NAME=kafka-connect
+      - CONNECT_REST_PORT=8083
+      - CONNECT_GROUP_ID=kafka-connect-group
+      - CONNECT_CONFIG_STORAGE_TOPIC=kafka-connect-configs
+      - CONNECT_OFFSET_STORAGE_TOPIC=kafka-connect-offsets
+      - CONNECT_STATUS_STORAGE_TOPIC=kafka-connect-status
+      - CONNECT_KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - CONNECT_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR=1
+      - CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR=1
+      - CONNECT_STATUS_STORAGE_REPLICATION_FACTOR=1
+      - CONNECT_TOPIC_CREATION_ENABLE=true
+      - CONNECT_TOPIC_CREATION_GROUPS=configs,offsets,status
+      - CONNECT_TOPIC_CREATION_CONFIGS=configs.replication.factor=1,configs.cleanup.policy=compact;offsets.replication.factor=1,offsets.cleanup.policy=compact;status.replication.factor=1,status.cleanup.policy=compact
+
+  kafka-rest-proxy:
+    image: "confluentinc/cp-kafka-rest:latest"
+    ports:
+      - "8082:8082"
+    networks:
+      - app-tier
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_REST_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_REST_LISTENERS=http://0.0.0.0:8082
